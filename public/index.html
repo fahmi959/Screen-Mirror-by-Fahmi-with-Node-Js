@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>WebRTC Mirror</title>
+</head>
+<body>
+  <h2>WebRTC Screen Mirror</h2>
+  <button onclick="startHost()">🎥 Host (Share Screen)</button>
+  <button onclick="startViewer()">👁️ Viewer (Smartboard)</button>
+  <br><br>
+  <video id="video" autoplay playsinline controls style="width:90%; max-height:80vh; border:1px solid #888;"></video>
+
+  <script>
+    const ws = new WebSocket(`ws://${location.host}`);
+    let pc;
+    let isHost = false;
+
+    ws.onmessage = async ({ data }) => {
+      const msg = JSON.parse(data);
+
+      if (msg.type === 'offer' && !isHost) {
+        pc = createPeer();
+        await pc.setRemoteDescription(new RTCSessionDescription(msg.offer));
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        ws.send(JSON.stringify({ type: 'answer', answer: pc.localDescription }));
+      }
+
+      if (msg.type === 'answer' && isHost) {
+        await pc.setRemoteDescription(new RTCSessionDescription(msg.answer));
+      }
+
+      if (msg.type === 'candidate') {
+        pc?.addIceCandidate(new RTCIceCandidate(msg.candidate));
+      }
+
+      if (msg.type === 'viewer-ready' && isHost) {
+        startScreenShare();
+      }
+    };
+
+    function createPeer() {
+      const p = new RTCPeerConnection();
+      p.onicecandidate = e => {
+        if (e.candidate) {
+          ws.send(JSON.stringify({ type: 'candidate', candidate: e.candidate }));
+        }
+      };
+      p.ontrack = e => {
+        document.getElementById('video').srcObject = e.streams[0];
+      };
+      return p;
+    }
+
+    async function startHost() {
+      isHost = true;
+      ws.send(JSON.stringify({ type: 'host' }));
+    }
+
+    async function startScreenShare() {
+      const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+      document.getElementById('video').srcObject = stream;
+
+      pc = createPeer();
+      stream.getTracks().forEach(track => pc.addTrack(track, stream));
+
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      ws.send(JSON.stringify({ type: 'offer', offer: pc.localDescription }));
+    }
+
+    function startViewer() {
+      isHost = false;
+      ws.send(JSON.stringify({ type: 'viewer' }));
+    }
+  </script>
+</body>
+</html>
